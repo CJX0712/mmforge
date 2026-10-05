@@ -47,7 +47,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Secret scan
         run: |
-          if git grep -nE "(sk-[A-Za-z0-9]|api[_-]?key|secret|password|GH_TOKEN|GITHUB_TOKEN)" -- '*.py' '*.md' '*.toml' '*.yml' '*.txt'; then
+          # 仅匹配真实密钥前缀（避免误伤变量名 GH_TOKEN/GITHUB_TOKEN 等）
+          if git grep -nE "(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|sk-[A-Za-z0-9]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,})" -- '*.py' '*.md' '*.toml' '*.yml' '*.txt'; then
             echo "::error::Potential secret found in source. Aborting."
             exit 1
           else
