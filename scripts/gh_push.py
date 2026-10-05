@@ -211,16 +211,24 @@ def l2_gitdata(local: Path, full: str, files: list[Path], token: str) -> bool:
                 for rel, sha in blobs.items()]
         tree_res = api_post(f"/repos/{full}/git/trees", token, {"tree": tree})
         tree_sha = tree_res["sha"]
+        # 取现有 main 分支头作为父提交（仓库可能已被 gh 预建，含默认分支）
+        parents = []
+        try:
+            ref = api_get(f"/repos/{full}/git/ref/heads/main", token)
+            parents = [ref["object"]["sha"]]
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
         commit = api_post(f"/repos/{full}/git/commits", token,
                           {"message": "MMForge v0.1.0 · 跨模态对比学习系统（作者：晨星）",
-                           "tree": tree_sha, "parents": []})
+                           "tree": tree_sha, "parents": parents})
         commit_sha = commit["sha"]
         # 创建或更新 main 分支引用
         try:
             api_post(f"/repos/{full}/git/refs", token,
                      {"ref": "refs/heads/main", "sha": commit_sha})
         except urllib.error.HTTPError as e:
-            if e.code == 422:  # ref 已存在，更新
+            if e.code in (409, 422):  # ref 已存在，更新
                 api_patch(f"/repos/{full}/git/refs/heads/main", token,
                           {"sha": commit_sha})
             else:
@@ -237,28 +245,32 @@ def l3_contents(local: Path, full: str, files: list[Path], token: str) -> bool:
     try:
         log("L3: Contents API 逐文件推送")
         ok = 0
+        fail = 0
         for p in files:
             rel = str(p.relative_to(local)).replace(os.sep, "/")
             content = base64.b64encode(p.read_bytes()).decode("ascii")
-            # 检查是否已存在
-            sha = None
             try:
-                existing = api_get(f"/repos/{full}/contents/{rel}", token)
-                sha = existing.get("sha")
-            except urllib.error.HTTPError as e:
-                if e.code != 404:
-                    raise
-            body = {"message": f"add {rel} (MMForge)", "content": content,
-                    "branch": "main"}
-            if sha:
-                body["sha"] = sha
-            if sha:
-                api_put(f"/repos/{full}/contents/{rel}", token, body)
-            else:
-                api_post(f"/repos/{full}/contents/{rel}", token, body)
-            ok += 1
-        log(f"L3 完成，写入 {ok}/{len(files)} 个文件")
-        return ok > 0
+                # 检查是否已存在
+                sha = None
+                try:
+                    existing = api_get(f"/repos/{full}/contents/{rel}", token)
+                    sha = existing.get("sha")
+                except urllib.error.HTTPError as e:
+                    if e.code != 404:
+                        raise
+                body = {"message": f"add {rel} (MMForge)", "content": content,
+                        "branch": "main"}
+                if sha:
+                    body["sha"] = sha
+                    api_put(f"/repos/{full}/contents/{rel}", token, body)
+                else:
+                    api_post(f"/repos/{full}/contents/{rel}", token, body)
+                ok += 1
+            except Exception as e:
+                fail += 1
+                log(f"  L3 写 {rel} 失败（跳过）：{e}")
+        log(f"L3 完成，写入 {ok}/{len(files)} 个文件，失败 {fail}")
+        return ok > 0 and fail == 0
     except Exception as e:
         log(f"L3 失败：{e}")
         return False
@@ -344,7 +356,7 @@ def main() -> int:
         return 1
 
     if not args.no_release:
-        tag_and_release(full, args.tag, args.release, token)
+        tag_and_release(full, args.tag, release, token)
 
     log(f"完成。仓库地址：https://github.com/{full}")
     return 0
