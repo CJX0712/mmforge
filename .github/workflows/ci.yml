@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    name: lint + test + demo
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies (pinned lock)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock.txt
+          pip install -r requirements-dev.txt
+          pip install -e .
+
+      - name: Lint (ruff hard gate)
+        run: ruff check .
+
+      - name: Unit tests (pytest + coverage)
+        run: pytest -q --cov=mmforge --cov-report=term-missing
+
+      - name: Demo smoke (determinism self-check)
+        run: python -m mmforge.examples.run_demo
+
+  release-guard:
+    name: release guard (no secrets leaked)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Secret scan
+        run: |
+          if git grep -nE "(sk-[A-Za-z0-9]|api[_-]?key|secret|password|GH_TOKEN|GITHUB_TOKEN)" -- '*.py' '*.md' '*.toml' '*.yml' '*.txt'; then
+            echo "::error::Potential secret found in source. Aborting."
+            exit 1
+          else
+            echo "No obvious secrets detected."
+          fi
